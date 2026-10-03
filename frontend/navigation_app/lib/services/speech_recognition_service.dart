@@ -4,6 +4,10 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 typedef VoiceCommandHandler = FutureOr<void> Function(String command);
+typedef VoiceRecognitionErrorHandler = FutureOr<void> Function(
+  String code,
+  String message,
+);
 
 class SpeechRecognitionService {
   static const MethodChannel _channel = MethodChannel('voice_recognition');
@@ -18,19 +22,32 @@ class SpeechRecognitionService {
   Timer? _restartTimer;
   VoiceCommandHandler? _onResult;
   ValueChanged<String>? _onStatusChanged;
+  VoiceRecognitionErrorHandler? _onError;
 
-  Future<bool> initialize({ValueChanged<String>? onStatusChanged}) async {
+  Future<bool> initialize({
+    ValueChanged<String>? onStatusChanged,
+    VoiceRecognitionErrorHandler? onError,
+  }) async {
     _disposed = false;
     _onStatusChanged = onStatusChanged;
+    _onError = onError;
     _channel.setMethodCallHandler(_handleNativeCall);
     _setStatus('Initializing voice control');
     try {
       _isInitialized = await _channel.invokeMethod<bool>('initialize') ?? false;
     } on MissingPluginException {
       _isInitialized = false;
+      await _onError?.call(
+        'unavailable',
+        'Speech recognition is unavailable on this device.',
+      );
     } on PlatformException catch (error) {
       _isInitialized = false;
       _setStatus('Voice control error: ${error.message ?? error.code}');
+      await _onError?.call(
+        error.code,
+        error.message ?? 'Speech recognition could not be started.',
+      );
     }
     if (_isInitialized) {
       _setStatus('Ready to listen');
@@ -79,11 +96,13 @@ class SpeechRecognitionService {
               message ?? 'Listening paused; restarting speech recognition');
           _scheduleRestart();
         }
+        await _onError?.call(code ?? 'recognition_error', message ?? '');
       case 'onRecognitionState':
         final state = call.arguments?.toString() ?? 'ready';
         _isListening = state == 'listening';
         if (state == 'permission_denied' || state == 'unavailable') {
           _isInitialized = false;
+          await _onError?.call(state, 'Speech recognition is unavailable.');
         }
         _setStatus(_statusForNativeState(state));
       case 'onPermissionResult':
@@ -91,6 +110,12 @@ class SpeechRecognitionService {
         _isInitialized = granted;
         _setStatus(
             granted ? 'Ready to listen' : 'Microphone permission denied');
+        if (!granted) {
+          await _onError?.call(
+            'permission_denied',
+            'Microphone permission denied',
+          );
+        }
         if (granted && _shouldListen && !_isTtsSpeaking) {
           await _startListeningIfNeeded();
         }
@@ -258,6 +283,13 @@ class SpeechRecognitionService {
     }
   }
 
+  Future<void> setLanguage(String languageTag) async {
+    _recognitionLanguageTag = languageTag;
+    if (_isInitialized && _shouldListen && !_isTtsSpeaking) {
+      await _startListeningIfNeeded();
+    }
+  }
+
   bool isReady() => _isInitialized;
 
   bool isListening() => _isListening;
@@ -274,6 +306,7 @@ class SpeechRecognitionService {
     _restartTimer = null;
     _onResult = null;
     _onStatusChanged = null;
+    _onError = null;
     _isListening = false;
     _isInitialized = false;
     _channel.setMethodCallHandler(null);

@@ -7,7 +7,10 @@ import '../services/backend_service.dart';
 import '../services/camera_service.dart';
 import '../services/voice_service.dart';
 import '../services/speech_recognition_service.dart';
+import '../services/localization_service.dart';
 import '../models/navigation_model.dart';
+import '../l10n/assistant_language.dart';
+import 'language_selection_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({
@@ -50,8 +53,8 @@ class _HomeScreenState extends State<HomeScreen> {
   // Assistant state
   bool _isAssistantRunning = false;
   bool _isStarting = false;
-  String _statusMessage = 'Assistant Ready';
-  String _navigationMessage = 'Waiting to start...';
+  String _statusMessage = '';
+  String _navigationMessage = '';
   String _voiceControlStatus = 'Voice control starting';
   String _lastInstruction = 'No navigation instruction is available yet.';
   NavigationModel? _latestNavigation;
@@ -62,18 +65,53 @@ class _HomeScreenState extends State<HomeScreen> {
   DateTime? _lastHapticAt;
   String? _lastHapticSignature;
   int _assistantGeneration = 0;
+  AssistantLanguage _spokenLanguage = AssistantLanguage.english;
 
   // Voice services
   late final VoiceService _voiceService;
   late final SpeechRecognitionService _speechRecognitionService;
   late final BackendService _backendService;
   late final CameraService _cameraService;
+  final LocalizationService _localizationService = LocalizationService();
+
+  AssistantLanguage get _assistantLanguage {
+    return switch (_localizationService.currentLanguage) {
+      AppLanguage.telugu => AssistantLanguage.telugu,
+      AppLanguage.hindi => AssistantLanguage.hindi,
+      _ => AssistantLanguage.english,
+    };
+  }
+
+  AssistantLocalizations get _assistantLocalizations =>
+      AssistantLocalizations(_assistantLanguage);
+  AssistantLocalizations get _spokenLocalizations =>
+      AssistantLocalizations(_spokenLanguage);
 
   // Color constants for high contrast
   static const Color _primaryColor = Colors.blue;
   static const Color _startButtonColor = Colors.green;
   static const Color _stopButtonColor = Colors.red;
   static const Color _backgroundColor = Colors.white;
+
+  Future<void> _reconfigureLanguageServices() async {
+    await _localizationService.init();
+    final lang = _localizationService.currentLanguage;
+    final languageData = _localizationService.getLanguageData(
+      lang ?? AppLanguage.english,
+    );
+    final voiceAvailable =
+        await _voiceService.setLanguage(languageData.ttsLanguage);
+    _spokenLanguage =
+        voiceAvailable ? _assistantLanguage : AssistantLanguage.english;
+    await _speechRecognitionService.stopListening();
+    await _speechRecognitionService.setLanguage(
+      languageData.speechRecognizerLanguage,
+    );
+    await _speechRecognitionService.startListening(
+      _processVoiceCommand,
+      languageTag: languageData.speechRecognizerLanguage,
+    );
+  }
 
   @override
   void initState() {
@@ -89,7 +127,17 @@ class _HomeScreenState extends State<HomeScreen> {
     _voiceService = widget.voiceService ?? VoiceService();
     _speechRecognitionService =
         widget.speechRecognitionService ?? SpeechRecognitionService();
-    _initializeVoiceServices();
+    _initializeScreen();
+  }
+
+  Future<void> _initializeScreen() async {
+    await _localizationService.init();
+    if (!mounted) return;
+    setState(() {
+      _statusMessage = _localizationService.getMessage('assistant_ready');
+      _navigationMessage = _localizationService.getMessage('waiting_to_start');
+    });
+    await _initializeVoiceServices();
   }
 
   @override
@@ -104,29 +152,69 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _initializeVoiceServices() async {
     final ttsInitialized = await _voiceService.initialize();
     if (!mounted) return;
+    final lang = _localizationService.currentLanguage;
+    if (ttsInitialized && lang != null) {
+      final langData = _localizationService.getLanguageData(lang);
+      final voiceAvailable =
+          await _voiceService.setLanguage(langData.ttsLanguage);
+      _spokenLanguage =
+          voiceAvailable ? _assistantLanguage : AssistantLanguage.english;
+    }
     if (ttsInitialized) {
-      await Future<void>.delayed(const Duration(milliseconds: 500));
+      if (!widget.skipSpeechPause) {
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+      }
       if (!mounted) return;
-      await _speakWithPause(
-        'AI Navigation Assistant is ready. Say start assistance to begin.',
-      );
+      await _speakWithPause(_spokenLocalizations.text('welcome'));
+      if (lang != null && _spokenLanguage == AssistantLanguage.english) {
+        await _speakWithPause(_spokenLocalizations.text('ttsFallback'));
+      }
+    }
+
+    // Configure speech recognition language
+    if (lang != null) {
+      final langData = _localizationService.getLanguageData(lang);
+      await _speechRecognitionService
+          .setLanguage(langData.speechRecognizerLanguage);
     }
 
     final speechInitialized = await _speechRecognitionService.initialize(
       onStatusChanged: (status) {
         if (mounted) setState(() => _voiceControlStatus = status);
       },
+      onError: (code, message) {
+        if (code == 'language_fallback' && mounted) {
+          setState(() => _voiceControlStatus =
+              'Selected speech recognition is unavailable. English commands are also accepted.');
+          unawaited(_speakWithPause(
+            _spokenLocalizations.text('speechFallback'),
+          ));
+        }
+      },
     );
-    await _speechRecognitionService.startListening(_processVoiceCommand);
+    if (lang != null) {
+      final langData = _localizationService.getLanguageData(lang);
+      await _speechRecognitionService.startListening(
+        _processVoiceCommand,
+        languageTag: langData.speechRecognizerLanguage,
+      );
+    } else {
+      await _speechRecognitionService.startListening(_processVoiceCommand);
+    }
     if (mounted && !speechInitialized) {
       setState(() => _voiceControlStatus =
-          'Microphone permission required or speech recognition unavailable');
+          'Microphone or speech recognition unavailable. Use the English controls.');
     }
   }
 
   Future<void> _speakWithPause(String text) async {
     await _speechRecognitionService.setTtsSpeaking(true);
     try {
+      if (_voiceService.activeLanguageTag == 'en-US' &&
+          _spokenLanguage != AssistantLanguage.english) {
+        await _voiceService.setLanguage('en-US');
+        _spokenLanguage = AssistantLanguage.english;
+      }
       await _voiceService.speak(text);
       if (!widget.skipSpeechPause) {
         await Future<void>.delayed(const Duration(milliseconds: 500));
@@ -137,36 +225,104 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _processVoiceCommand(String command) async {
-    final normalized = command
-        .toLowerCase()
-        .replaceAll(RegExp(r'[^a-z0-9\s]'), ' ')
-        .trim()
-        .replaceAll(RegExp(r'\s+'), ' ');
-    final words = normalized.split(' ');
+    final localized = _assistantLocalizations;
+    const english = AssistantLocalizations(AssistantLanguage.english);
     debugPrint('[voice] HomeScreen recognized text: "$command"');
-    if (words.contains('stop')) {
+    if (localized.isChangeLanguage(command) ||
+        english.isChangeLanguage(command)) {
+      await _changeLanguage();
+    } else if (localized.isStop(command) || english.isStop(command)) {
       debugPrint('[voice] Dispatching stop-assistance command');
       await _stopAssistant();
-    } else if (normalized.contains('repeat instruction') ||
-        words.contains('repeat')) {
+    } else if (localized.isRepeat(command) || english.isRepeat(command)) {
       await _speakWithPause(_lastInstruction);
-    } else if (words.contains('read') &&
-        (words.contains('sign') || words.contains('text'))) {
+    } else if (localized.isReadSign(command) || english.isReadSign(command)) {
       await _readSign();
-    } else if (_isSceneQuestion(words)) {
-      await _answerSceneQuestion(words);
-    } else if (words.contains('start')) {
+    } else if (_isSceneQuestion(command) || _isEnglishSceneQuestion(command)) {
+      await _answerSceneQuestion(command);
+    } else if (localized.isStart(command) || english.isStart(command)) {
       debugPrint('[voice] Dispatching start-assistance command');
       await _startAssistant();
-    } else if (words.contains('help')) {
+    } else if (localized.isHelp(command) || english.isHelp(command)) {
       await _speakHelp();
     }
   }
 
   Future<void> _speakHelp() async {
+    await _speakWithPause(_spokenLocalizations.text('help'));
+  }
+
+  bool _isEnglishSceneQuestion(String command) {
+    const english = AssistantLocalizations(AssistantLanguage.english);
+    return english.questionPosition(command) != null ||
+        english.isObstacleQuestion(command);
+  }
+
+  Future<void> _changeLanguage() async {
+    if (_isAssistantRunning || _isStarting) {
+      await _stopAssistant();
+    }
+    await _speechRecognitionService.stopListening();
+    await _voiceService.setLanguage('en-US');
+    _spokenLanguage = AssistantLanguage.english;
     await _speakWithPause(
-      'Available commands: start assistance, stop assistance, read sign, ask what is in front, left, or right, repeat instruction, and help.',
+      'Changing spoken language. Say English, Telugu, or Hindi.',
     );
+    if (!mounted) return;
+    await Navigator.of(context).push<AssistantLanguage>(
+      MaterialPageRoute(
+        builder: (_) => LanguageSelectionScreen(
+          voiceService: _voiceService,
+          speechRecognitionService: _speechRecognitionService,
+          localizationService: _localizationService,
+        ),
+      ),
+    );
+    if (!mounted) return;
+    await _reconfigureLanguageServices();
+    if (mounted) {
+      setState(() {
+        _statusMessage = _localizationService.getMessage('assistant_ready');
+        _navigationMessage =
+            _localizationService.getMessage('waiting_to_start');
+      });
+    }
+  }
+
+  Future<void> _speakRecognizedText(String text) async {
+    final languageTag = _textLocale(text);
+    if (languageTag == null) {
+      await _speakWithPause(
+          _spokenLocalizations.text('spokenTextVoiceMissing'));
+      return;
+    }
+    await _speechRecognitionService.setTtsSpeaking(true);
+    try {
+      final success =
+          await _voiceService.speakTextInLanguage(text, languageTag);
+      if (!success) {
+        final currentLanguage = _localizationService.currentLanguage;
+        final restored = await _voiceService.setLanguage(
+          _localizationService
+              .getLanguageData(currentLanguage ?? AppLanguage.english)
+              .ttsLanguage,
+        );
+        _spokenLanguage =
+            restored ? _assistantLanguage : AssistantLanguage.english;
+        await _voiceService.speak(
+          _spokenLocalizations.text('spokenTextVoiceMissing'),
+        );
+      }
+    } finally {
+      await _speechRecognitionService.setTtsSpeaking(false);
+    }
+  }
+
+  String? _textLocale(String text) {
+    if (RegExp(r'[\u0C00-\u0C7F]').hasMatch(text)) return 'te-IN';
+    if (RegExp(r'[\u0900-\u097F]').hasMatch(text)) return 'hi-IN';
+    if (RegExp(r'[A-Za-z]').hasMatch(text)) return 'en-US';
+    return null;
   }
 
   Future<void> _runHapticDiagnostic() async {
@@ -193,19 +349,15 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  bool _isSceneQuestion(List<String> words) {
-    final asksAboutObjects =
-        words.contains('what') || words.contains('see') || words.contains('is');
-    final asksObstacle = words.contains('obstacle');
-    final hasDirection = words.any(
-      (word) => {'front', 'ahead', 'left', 'right'}.contains(word),
-    );
-    return asksObstacle || (asksAboutObjects && hasDirection);
+  bool _isSceneQuestion(String command) {
+    final localizations = _assistantLocalizations;
+    return localizations.questionPosition(command) != null ||
+        localizations.isObstacleQuestion(command);
   }
 
   Future<void> _readSign() async {
     if (!_isAssistantRunning) {
-      await _speakWithPause('Start assistance before reading a sign.');
+      await _speakWithPause(_spokenLocalizations.text('readSignStart'));
       return;
     }
     final generation = _assistantGeneration;
@@ -215,7 +367,7 @@ class _HomeScreenState extends State<HomeScreen> {
         generation != _assistantGeneration) {
       if (!_isAssistantRunning || generation != _assistantGeneration) return;
       await _speakWithPause(
-        'I could not capture the sign. Hold the phone steady and say read sign to retry.',
+        _spokenLocalizations.text('captureRetry'),
       );
       return;
     }
@@ -228,20 +380,24 @@ class _HomeScreenState extends State<HomeScreen> {
       }
       if (reading.text.trim().isEmpty || reading.confidence < 0.60) {
         await _speakWithPause(
-          'I could not read that sign clearly. Hold the phone steady and say read sign to retry.',
+          _spokenLocalizations.text('ocrRetry'),
         );
         return;
       }
-      await _speakWithPause('The sign says: ${reading.text}.');
+      await _speakWithPause(_spokenLocalizations.text('signSaysPrefix'));
+      await _speakRecognizedText(reading.text);
     } catch (error) {
       debugPrint('[ocr] Sign reading failed: $error');
       await _speakWithPause(
-        'Sign reading is unavailable. Check the backend connection and try again.',
+        _spokenLocalizations.text('ocrUnavailable'),
       );
     }
   }
 
-  Future<void> _answerSceneQuestion(List<String> words) async {
+  Future<void> _answerSceneQuestion(String command) async {
+    final localizations = _assistantLocalizations;
+    final normalized = localizations.normalizeCommand(command);
+    final words = normalized.split(' ');
     final navigation = _latestNavigation;
     final navigationAt = _latestNavigationAt;
     if (!_isAssistantRunning ||
@@ -249,26 +405,36 @@ class _HomeScreenState extends State<HomeScreen> {
         navigationAt == null ||
         DateTime.now().difference(navigationAt) > const Duration(seconds: 6)) {
       await _speakWithPause(
-        'I do not have a recent camera view. Start assistance and ask again.',
+        _spokenLocalizations.text('questionUnavailable'),
       );
       return;
     }
 
-    final asksObstacle = words.contains('obstacle');
-    final position = words.contains('left')
-        ? 'LEFT'
-        : words.contains('right')
-            ? 'RIGHT'
-            : 'CENTER';
-    final matches = navigation.detections
-        .where((detection) =>
-            detection.horizontalPosition.toUpperCase() == position)
-        .toList(growable: false);
+    final asksObstacle = localizations.isObstacleQuestion(command);
+    final questionPosition = localizations.questionPosition(command);
+    final position = switch (questionPosition) {
+      SceneQuestionPosition.left => 'LEFT',
+      SceneQuestionPosition.right => 'RIGHT',
+      _ => words.contains('left')
+          ? 'LEFT'
+          : words.contains('right')
+              ? 'RIGHT'
+              : 'CENTER',
+    };
+    final matches = questionPosition == SceneQuestionPosition.nearby
+        ? navigation.detections
+        : navigation.detections
+            .where((detection) =>
+                detection.horizontalPosition.toUpperCase() == position)
+            .toList(growable: false);
 
     if (matches.isEmpty) {
       final area = _cameraArea(position);
       await _speakWithPause(
-        'No object was detected in the $area. This does not confirm the walking route is clear.',
+        _spokenLocalizations.text(
+          'noObjectAtArea',
+          {'area': area},
+        ),
       );
       return;
     }
@@ -281,19 +447,27 @@ class _HomeScreenState extends State<HomeScreen> {
           .toSet();
       final hasRisk = risks.any((risk) => risk == 'HIGH' || risk == 'MEDIUM');
       await _speakWithPause(
-        hasRisk
-            ? 'Potential obstacle on the $area. $descriptions. This is camera-relative, not mapped route guidance.'
-            : 'Objects detected on the $area, with low reported collision risk. $descriptions. This does not confirm the route is clear.',
+        _spokenLocalizations.text(
+          hasRisk ? 'obstacleAtArea' : 'lowRiskAtArea',
+          {'area': area, 'objects': descriptions},
+        ),
       );
       return;
     }
 
     await _speakWithPause(
-      'Camera view: $descriptions. Positions are relative to the image, not a mapped route.',
+      _spokenLocalizations.text('cameraSummary', {'objects': descriptions}),
     );
   }
 
   String _cameraArea(String position) {
+    if (_spokenLanguage != AssistantLanguage.english) {
+      return _spokenLocalizations.area(switch (position) {
+        'LEFT' => SceneQuestionPosition.left,
+        'RIGHT' => SceneQuestionPosition.right,
+        _ => SceneQuestionPosition.front,
+      });
+    }
     switch (position) {
       case 'LEFT':
         return 'left side of the current camera view';
@@ -307,6 +481,15 @@ class _HomeScreenState extends State<HomeScreen> {
   String _describeDetection(DetectionModel detection) {
     final position = detection.horizontalPosition.toUpperCase();
     final area = _cameraArea(position);
+    if (_spokenLanguage != AssistantLanguage.english) {
+      final localizations = _spokenLocalizations;
+      return localizations.text('detection', {
+        'object': localizations.objectName(detection.className),
+        'area': area,
+        'risk': localizations.risk(detection.collisionRisk),
+        'proximity': localizations.proximity(detection.proximityCategory),
+      });
+    }
     final risk = detection.collisionRisk.trim().toUpperCase();
     final riskText = const {'HIGH', 'MEDIUM', 'LOW'}.contains(risk)
         ? '${risk.toLowerCase()} reported risk'
@@ -333,9 +516,9 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       backgroundColor: _backgroundColor,
       appBar: AppBar(
-        title: const Text(
-          'AI Navigation Assistant',
-          style: TextStyle(
+        title: Text(
+          _localizationService.getMessage('app_title'),
+          style: const TextStyle(
             fontSize: 24,
             fontWeight: FontWeight.bold,
             color: Colors.white,
@@ -348,10 +531,11 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Semantics(
           container: true,
           explicitChildNodes: true,
-          label: 'Assistance screen',
+          label: 'Navigation assistance screen',
           value: _statusMessage,
-          hint:
-              'Tap the screen to ${_isAssistantRunning ? 'stop' : 'start'} assistance',
+          hint: _isAssistantRunning
+              ? 'Tap the screen to stop assistance'
+              : 'Tap the screen to start assistance',
           onTap: _toggleAssistant,
           child: GestureDetector(
             key: const ValueKey('assistance-tap-surface'),
@@ -413,9 +597,9 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         child: Column(
           children: [
-            const Text(
-              'ASSISTANT STATUS',
-              style: TextStyle(
+            Text(
+              _localizationService.getMessage('assistant_status'),
+              style: const TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
                 color: Colors.black87,
@@ -423,7 +607,9 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 12),
             Text(
-              _statusMessage,
+              _statusMessage.isNotEmpty
+                  ? _statusMessage
+                  : _localizationService.getMessage('assistant_ready'),
               style: TextStyle(
                 fontSize: 28,
                 fontWeight: FontWeight.bold,
@@ -464,9 +650,9 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'NAVIGATION MESSAGE',
-              style: TextStyle(
+            Text(
+              _localizationService.getMessage('navigation_message'),
+              style: const TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
                 color: Colors.black87,
@@ -474,7 +660,9 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 12),
             Text(
-              _navigationMessage,
+              _navigationMessage.isNotEmpty
+                  ? _navigationMessage
+                  : _localizationService.getMessage('waiting_to_start'),
               style: const TextStyle(
                 fontSize: 22,
                 fontWeight: FontWeight.w500,
@@ -508,9 +696,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   borderRadius: BorderRadius.circular(12),
                 ),
               ),
-              child: const Text(
-                'START ASSISTANCE',
-                style: TextStyle(
+              child: Text(
+                _localizationService.getMessage('start_assistance'),
+                style: const TextStyle(
                   fontSize: 28,
                   fontWeight: FontWeight.bold,
                 ),
@@ -538,9 +726,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   borderRadius: BorderRadius.circular(12),
                 ),
               ),
-              child: const Text(
-                'STOP ASSISTANCE',
-                style: TextStyle(
+              child: Text(
+                _localizationService.getMessage('stop_assistance'),
+                style: const TextStyle(
                   fontSize: 28,
                   fontWeight: FontWeight.bold,
                 ),
@@ -553,11 +741,11 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildFooter() {
-    return const Column(
+    return Column(
       children: [
-        Divider(thickness: 2),
-        SizedBox(height: 16),
-        Text(
+        const Divider(thickness: 2),
+        const SizedBox(height: 16),
+        const Text(
           'AI-Powered Intelligent Navigation Assistant',
           style: TextStyle(
             fontSize: 16,
@@ -566,14 +754,30 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           textAlign: TextAlign.center,
         ),
-        SizedBox(height: 8),
-        Text(
-          'For Visually Impaired People',
+        const SizedBox(height: 8),
+        const Text(
+          'For visually impaired people',
           style: TextStyle(
             fontSize: 14,
             color: Colors.black54,
           ),
           textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: 16),
+        Semantics(
+          button: true,
+          label: 'Change spoken language',
+          hint: 'Double tap to change language',
+          child: TextButton(
+            onPressed: _changeLanguage,
+            child: const Text(
+              'CHANGE SPOKEN LANGUAGE',
+              style: TextStyle(
+                fontSize: 18,
+                color: Colors.blue,
+              ),
+            ),
+          ),
         ),
       ],
     );
@@ -589,7 +793,8 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _isStarting = true;
       _statusMessage = 'Assistant Starting';
-      _navigationMessage = 'Connecting to navigation backend...';
+      _navigationMessage =
+          _localizationService.getMessage('connecting_backend');
     });
 
     try {
@@ -599,7 +804,8 @@ class _HomeScreenState extends State<HomeScreen> {
       final connected = await _backendService.connect();
       if (!_isCurrentStart(generation)) return;
       if (!connected) {
-        throw StateError('Backend unavailable. Check the network connection.');
+        throw StateError(
+            _localizationService.getMessage('backend_unavailable'));
       }
 
       final cameraStarted = await _cameraService.start(
@@ -610,16 +816,16 @@ class _HomeScreenState extends State<HomeScreen> {
         return;
       }
       if (!cameraStarted) {
-        throw StateError('Camera unavailable. Check camera permissions.');
+        throw StateError(_localizationService.getMessage('camera_unavailable'));
       }
 
       setState(() {
         _isStarting = false;
         _isAssistantRunning = true;
-        _statusMessage = 'Assistant Running';
+        _statusMessage = _localizationService.getMessage('assistant_running');
         _navigationMessage = 'Assistance started. Waiting for instructions...';
       });
-      await _speakWithPause('Assistance started.');
+      await _speakWithPause(_spokenLocalizations.text('started'));
     } catch (error) {
       if (_isCurrentStart(generation)) {
         await _cameraService.stop();
@@ -629,9 +835,10 @@ class _HomeScreenState extends State<HomeScreen> {
             _isStarting = false;
             _isAssistantRunning = false;
             _statusMessage = 'Assistant Error';
-            _navigationMessage = 'Unable to start assistance: $error';
+            _navigationMessage =
+                '${_localizationService.getMessage('camera_error')}: $error';
           });
-          await _speakWithPause('Unable to start assistance. $error');
+          await _speakWithPause(_spokenLocalizations.text('startFailed'));
         }
       }
     } finally {
@@ -671,8 +878,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 const Duration(seconds: 15)) {
           _lastAnalysisErrorAnnouncementAt = now;
           await _speakWithPause(
-            'Navigation analysis is unavailable. Do not rely on guidance until the connection recovers.',
-          );
+              _spokenLocalizations.text('analysisUnavailable'));
         }
       }
     }
@@ -710,14 +916,12 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    final actionText = navigation.action == 'CAUTION / SLOW DOWN'
-        ? 'Caution. Slow down.'
-        : '${navigation.action[0]}${navigation.action.substring(1).toLowerCase()}.';
-    final announcement = urgent
-        ? 'Warning. $actionText ${navigation.reason}. ${_describeCurrentScene(navigation)}'
-        : navigation.action == 'CONTINUE'
-            ? _describeCurrentScene(navigation)
-            : 'Camera-based suggestion: $actionText ${navigation.reason}. This is not a mapped route.';
+    final announcement = navigation.action == 'CONTINUE'
+        ? _describeCurrentScene(navigation)
+        : '${_spokenLocalizations.navigationInstruction(
+            navigation.action,
+            _relevantObjectName(navigation),
+          )} ${_spokenLocalizations.text('routeDisclaimer')}';
 
     _lastAnnouncedNavigationKey = signature;
     _lastNavigationAnnouncementAt = now;
@@ -754,7 +958,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   String _describeCurrentScene(NavigationModel navigation) {
     if (navigation.detections.isEmpty) {
-      return 'No objects were detected in the current camera view. This does not confirm the walking route is clear.';
+      return _spokenLocalizations.text('emptySummary');
     }
     final detections = [...navigation.detections]..sort((first, second) {
         final riskDifference =
@@ -769,9 +973,29 @@ class _HomeScreenState extends State<HomeScreen> {
       final risk = detection.collisionRisk.toUpperCase();
       return risk == 'HIGH' || risk == 'MEDIUM';
     });
-    return hasReportedHazard
-        ? 'Nearby ${selected.first.collisionRisk.toLowerCase()}-risk scene: $descriptions. Positions are image-relative; depth is relative, not distance in meters.'
-        : 'Detected in the camera view: $descriptions. Positions are image-relative; this does not confirm the route is clear.';
+    if (hasReportedHazard) {
+      return _spokenLocalizations.text('hazardSummary', {
+        'risk': _spokenLocalizations.risk(selected.first.collisionRisk),
+        'objects': descriptions,
+      });
+    }
+    return _spokenLocalizations.text(
+      'detectedSummary',
+      {'objects': descriptions},
+    );
+  }
+
+  String _relevantObjectName(NavigationModel navigation) {
+    final relevantName = navigation.relevantObject;
+    for (final detection in navigation.detections) {
+      if (relevantName != null && detection.className == relevantName) {
+        return _spokenLocalizations.objectName(detection.className);
+      }
+    }
+    if (relevantName != null && relevantName != 'multiple obstacles') {
+      return _spokenLocalizations.objectName(relevantName);
+    }
+    return _spokenLocalizations.objectName('obstacle');
   }
 
   int _riskRank(String risk) {
@@ -808,7 +1032,7 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _isStarting = false;
       _isAssistantRunning = false;
-      _statusMessage = 'Assistant Stopped';
+      _statusMessage = _localizationService.getMessage('assistant_stopped');
       _navigationMessage = 'Assistance stopped. Ready to start again.';
     });
     _latestNavigation = null;
@@ -819,6 +1043,6 @@ class _HomeScreenState extends State<HomeScreen> {
       _voiceService.stop(),
       _speechRecognitionService.stopRiskHaptics(force: true),
     ]);
-    await _speakWithPause('Assistance stopped.');
+    await _speakWithPause(_spokenLocalizations.text('stopped'));
   }
 }

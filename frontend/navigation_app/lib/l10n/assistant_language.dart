@@ -71,7 +71,7 @@ class AssistantLocalizations {
       'emptySummary':
           'No objects were detected in the current camera view. This does not confirm the walking route is clear.',
       'hazardSummary':
-          'Nearby {risk}-risk scene: {objects}. Positions are image-relative; depth is relative, not distance in meters.',
+          'Nearby scene with {risk}: {objects}. Positions are image-relative; depth is relative, not distance in meters.',
       'detectedSummary':
           'Detected in the camera view: {objects}. Positions are image-relative; this does not confirm the route is clear.',
       'detection': '{object} at the {area}, {risk}, {proximity}',
@@ -93,6 +93,29 @@ class AssistantLocalizations {
       'actionMoveRight': 'Move right',
       'actionCaution': 'Caution. Slow down.',
       'warning': 'Warning.',
+      'navigationStop': 'Stop. {object} is very close ahead.',
+      'navigationMoveRight': 'Move right. The obstacle is on your left.',
+      'navigationMoveLeft': 'Move left. The obstacle is on your right.',
+      'navigationCaution': 'Caution. Slow down. {object} is ahead.',
+      'navigationContinue':
+          'Continue carefully. No higher-risk obstacle was detected in the camera view. This does not confirm the walking path is clear.',
+      'navigationObstacleAhead': 'Obstacle ahead.',
+      'signSaysPrefix': 'The sign says.',
+      'spokenTextVoiceMissing':
+          'The sign text is available, but its language voice is not installed.',
+      'noSpeechPrompt':
+          'I did not hear a clear choice. Please say English, Telugu, or Hindi.',
+      'microphoneDenied':
+          'Microphone access was denied. Use the English language buttons, or enable microphone access in Android app settings.',
+      'recognitionUnavailable':
+          'Voice recognition is unavailable. Use the English language buttons.',
+      'languageDataMissing':
+          'The selected voice is not installed. I will speak English. To add it, open Android text-to-speech settings and install the language voice.',
+      'selectedEnglish': 'English selected.',
+      'selectedTelugu': 'Telugu selected.',
+      'selectedHindi': 'Hindi selected.',
+      'repeatLanguagePrompt':
+          'Please say English, Telugu, or Hindi, or choose one of the English buttons.',
       'routeDisclaimer':
           'This is a camera-based suggestion, not a mapped route.',
       'readSignStart': 'Start assistance before reading a sign.',
@@ -104,7 +127,7 @@ class AssistantLocalizations {
           'Sign reading is unavailable. Check the backend connection and try again.',
       'signSays': 'The sign says: {text}.',
       'help':
-          'Available commands: start assistance, stop assistance, read sign, ask what is in front, left, or right, repeat instruction, and help.',
+          'Available commands: start or start assistance, stop or stop assistance, change language, read sign, ask what is in front, left, or right, repeat instruction, and help.',
       'speechFallback':
           'Selected-language speech recognition is unavailable. English recognition will be used.',
       'ttsFallback':
@@ -187,6 +210,30 @@ class AssistantLocalizations {
       'actionMoveRight': 'కుడివైపు కదలండి',
       'actionCaution': 'జాగ్రత్త. నెమ్మదిగా కదలండి.',
       'warning': 'హెచ్చరిక.',
+      'navigationStop': 'ఆగండి. మీ ముందు {object} చాలా దగ్గరగా ఉంది.',
+      'navigationMoveRight': 'కుడివైపు కదలండి. అడ్డంకి మీ ఎడమవైపు ఉంది.',
+      'navigationMoveLeft': 'ఎడమవైపు కదలండి. అడ్డంకి మీ కుడివైపు ఉంది.',
+      'navigationCaution':
+          'జాగ్రత్త. నెమ్మదిగా కదలండి. మీ ముందు {object} ఉంది.',
+      'navigationContinue':
+          'జాగ్రత్తగా ముందుకు సాగండి. కెమెరా దృశ్యంలో ఎక్కువ ప్రమాదం ఉన్న అడ్డంకి కనిపించలేదు. నడిచే దారి ఖాళీగా ఉందని ఇది నిర్ధారించదు.',
+      'navigationObstacleAhead': 'ముందు అడ్డంకి ఉంది.',
+      'signSaysPrefix': 'బోర్డుపై ఇలా ఉంది.',
+      'spokenTextVoiceMissing':
+          'బోర్డు వచనం ఉంది, కానీ ఆ భాషకు వాయిస్ ఇన్‌స్టాల్ కాలేదు.',
+      'noSpeechPrompt':
+          'మీ ఎంపిక స్పష్టంగా వినిపించలేదు. ఇంగ్లీష్, తెలుగు లేదా హిందీ అని చెప్పండి.',
+      'microphoneDenied':
+          'మైక్రోఫోన్ అనుమతి లేదు. ఇంగ్లీష్ భాష బటన్లను ఉపయోగించండి లేదా Android యాప్ సెట్టింగుల్లో మైక్రోఫోన్ అనుమతించండి.',
+      'recognitionUnavailable':
+          'వాయిస్ గుర్తింపు అందుబాటులో లేదు. ఇంగ్లీష్ భాష బటన్లను ఉపయోగించండి.',
+      'languageDataMissing':
+          'ఎంచుకున్న వాయిస్ ఇన్‌స్టాల్ కాలేదు. ఇంగ్లీష్‌లో మాట్లాడుతాను. Android టెక్స్ట్-టు-స్పీచ్ సెట్టింగుల్లో ఈ భాషా వాయిస్‌ను ఇన్‌స్టాల్ చేయండి.',
+      'selectedEnglish': 'ఇంగ్లీష్ ఎంచుకున్నారు.',
+      'selectedTelugu': 'తెలుగు ఎంచుకున్నారు.',
+      'selectedHindi': 'హిందీ ఎంచుకున్నారు.',
+      'repeatLanguagePrompt':
+          'ఇంగ్లీష్, తెలుగు లేదా హిందీ అని చెప్పండి లేదా ఇంగ్లీష్ బటన్లలో ఒకదాన్ని ఎంచుకోండి.',
       'routeDisclaimer': 'ఇది కెమెరా ఆధారిత సూచన మాత్రమే, మ్యాప్ దారి కాదు.',
       'readSignStart': 'బోర్డు చదవడానికి ముందు సహాయం ప్రారంభించండి.',
       'captureRetry':
@@ -197,7 +244,7 @@ class AssistantLocalizations {
           'బోర్డు చదవడం అందుబాటులో లేదు. బ్యాక్‌ఎండ్ అనుసంధానాన్ని తనిఖీ చేసి మళ్లీ ప్రయత్నించండి.',
       'signSays': 'బోర్డుపై ఇలా ఉంది: {text}.',
       'help':
-          'సహాయం ప్రారంభించండి, సహాయం ఆపండి, బోర్డు చదువు, ముందు లేదా ఎడమ లేదా కుడి వైపు ఏముంది అని అడగండి, సూచన మళ్లీ చెప్పు, లేదా సహాయం అని చెప్పండి.',
+          'సహాయం ప్రారంభించండి లేదా ప్రారంభించండి, సహాయం ఆపండి లేదా ఆపు, భాష మార్చండి, బోర్డు చదువు, ముందు లేదా ఎడమ లేదా కుడి వైపు ఏముంది అని అడగండి, సూచన మళ్లీ చెప్పు, లేదా సహాయం అని చెప్పండి.',
       'speechFallback':
           'ఈ భాషలో వాయిస్ గుర్తింపు అందుబాటులో లేదు. ఇంగ్లీష్ వాయిస్ గుర్తింపును ఉపయోగిస్తాము.',
       'ttsFallback':
@@ -280,6 +327,29 @@ class AssistantLocalizations {
       'actionMoveRight': 'दाईं ओर जाएँ',
       'actionCaution': 'सावधान। धीरे चलें।',
       'warning': 'चेतावनी।',
+      'navigationStop': 'रुकें। {object} सामने बहुत पास है।',
+      'navigationMoveRight': 'दाईं ओर जाएँ। बाधा आपकी बाईं ओर है।',
+      'navigationMoveLeft': 'बाईं ओर जाएँ। बाधा आपकी दाईं ओर है।',
+      'navigationCaution': 'सावधान। धीरे चलें। {object} सामने है।',
+      'navigationContinue':
+          'सावधानी से आगे बढ़ें। कैमरा दृश्य में अधिक जोखिम वाली बाधा नहीं दिखी। इससे रास्ता खाली होने की पुष्टि नहीं होती।',
+      'navigationObstacleAhead': 'सामने बाधा है।',
+      'signSaysPrefix': 'साइन पर लिखा है।',
+      'spokenTextVoiceMissing':
+          'साइन का पाठ उपलब्ध है, लेकिन उस भाषा की आवाज़ इंस्टॉल नहीं है।',
+      'noSpeechPrompt':
+          'आपकी पसंद स्पष्ट नहीं सुनाई दी। अंग्रेज़ी, तेलुगु या हिंदी कहें।',
+      'microphoneDenied':
+          'माइक्रोफ़ोन अनुमति नहीं है। अंग्रेज़ी भाषा बटन चुनें या Android ऐप सेटिंग में माइक्रोफ़ोन अनुमति दें।',
+      'recognitionUnavailable':
+          'वॉइस पहचान उपलब्ध नहीं है। अंग्रेज़ी भाषा बटन चुनें।',
+      'languageDataMissing':
+          'चुनी हुई आवाज़ इंस्टॉल नहीं है। मैं अंग्रेज़ी में बोलूँगा। इसे जोड़ने के लिए Android टेक्स्ट-टू-स्पीच सेटिंग में भाषा की आवाज़ इंस्टॉल करें।',
+      'selectedEnglish': 'अंग्रेज़ी चुनी गई।',
+      'selectedTelugu': 'तेलुगु चुनी गई।',
+      'selectedHindi': 'हिंदी चुनी गई।',
+      'repeatLanguagePrompt':
+          'अंग्रेज़ी, तेलुगु या हिंदी कहें, या अंग्रेज़ी बटनों में से एक चुनें।',
       'routeDisclaimer': 'यह कैमरा-आधारित सुझाव है, नक्शे का रास्ता नहीं।',
       'readSignStart': 'साइन पढ़ने से पहले सहायता शुरू करें।',
       'captureRetry':
@@ -290,7 +360,7 @@ class AssistantLocalizations {
           'साइन पढ़ना उपलब्ध नहीं है। बैकएंड कनेक्शन जाँचकर फिर कोशिश करें।',
       'signSays': 'साइन पर लिखा है: {text}.',
       'help':
-          'सहायता शुरू करें, सहायता रोकें, साइन पढ़ें, सामने या बाईं या दाईं ओर क्या है पूछें, निर्देश दोहराएँ, या मदद कहें।',
+          'सहायता शुरू करें या शुरू करें, सहायता रोकें या रुकें, भाषा बदलें, साइन पढ़ें, सामने या बाईं या दाईं ओर क्या है पूछें, निर्देश दोहराएँ, या मदद कहें।',
       'speechFallback':
           'इस भाषा में वॉइस पहचान उपलब्ध नहीं है। अंग्रेज़ी वॉइस पहचान उपयोग होगी।',
       'ttsFallback':
@@ -350,8 +420,60 @@ class AssistantLocalizations {
       });
 
   String objectName(String name) {
-    return _objectNames[language]?[name.toLowerCase()] ?? name;
+    return _objectNames[language]?[name.toLowerCase()] ??
+        switch (language) {
+          AssistantLanguage.english => name,
+          AssistantLanguage.telugu => 'వస్తువు',
+          AssistantLanguage.hindi => 'वस्तु',
+        };
   }
+
+  String navigationInstruction(String action, String objectName) {
+    final key = switch (action.toUpperCase()) {
+      'STOP' => 'navigationStop',
+      'MOVE RIGHT' => 'navigationMoveRight',
+      'MOVE LEFT' => 'navigationMoveLeft',
+      'CAUTION / SLOW DOWN' => 'navigationCaution',
+      _ => 'navigationContinue',
+    };
+    return text(key, {'object': objectName});
+  }
+
+  AssistantLanguage? matchLanguageChoice(String phrase) {
+    final normalized = normalizeCommand(phrase);
+    if (const [
+      'english',
+      'inglish',
+      'ఇంగ్లీష్',
+      'ఆంగ్లం',
+      'अंग्रेज़ी',
+      'अंग्रेजी'
+    ].any(normalized.contains)) {
+      return AssistantLanguage.english;
+    }
+    if (const ['telugu', 'తెలుగు', 'तेलुगु'].any(normalized.contains)) {
+      return AssistantLanguage.telugu;
+    }
+    if (const ['hindi', 'హిందీ', 'हिंदी'].any(normalized.contains)) {
+      return AssistantLanguage.hindi;
+    }
+    return null;
+  }
+
+  bool isChangeLanguage(String command) =>
+      _match(
+        normalizeCommand(command),
+        switch (language) {
+          AssistantLanguage.english => const [
+              'change language',
+              'select language',
+              'choose language'
+            ],
+          AssistantLanguage.telugu => const ['భాష మార్చండి', 'భాష ఎంచుకోండి'],
+          AssistantLanguage.hindi => const ['भाषा बदलें', 'भाषा चुनें'],
+        },
+      ) !=
+      null;
 
   static const Map<AssistantLanguage, Map<String, String>> _objectNames = {
     AssistantLanguage.english: {},
@@ -390,7 +512,7 @@ class AssistantLocalizations {
 
   String normalizeCommand(String command) => command
       .toLowerCase()
-      .replaceAll(RegExp(r'[^\p{L}\p{N}\s]', unicode: true), ' ')
+      .replaceAll(RegExp(r'[^\p{L}\p{M}\p{N}\s]', unicode: true), ' ')
       .trim()
       .replaceAll(RegExp(r'\s+'), ' ');
 
@@ -523,5 +645,15 @@ class AssistantLocalizations {
       if (_match(normalized, entry.value) != null) return entry.key;
     }
     return null;
+  }
+
+  bool isObstacleQuestion(String command) {
+    final normalized = normalizeCommand(command);
+    final obstacleTerms = switch (language) {
+      AssistantLanguage.english => const ['obstacle'],
+      AssistantLanguage.telugu => const ['అడ్డంకి'],
+      AssistantLanguage.hindi => const ['बाधा'],
+    };
+    return _match(normalized, obstacleTerms) != null;
   }
 }

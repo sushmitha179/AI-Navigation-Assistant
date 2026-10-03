@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:navigation_app/models/detection_model.dart';
 import 'package:navigation_app/models/navigation_model.dart';
 import 'package:navigation_app/models/sign_reading.dart';
@@ -15,6 +16,8 @@ import 'package:navigation_app/services/voice_service.dart';
 const _voiceChannel = MethodChannel('voice_recognition');
 
 void main() {
+  setUp(() => SharedPreferences.setMockInitialValues({}));
+
   group('HomeScreen Widget Tests', () {
     testWidgets('HomeScreen renders correctly', (WidgetTester tester) async {
       final harness = _HomeScreenHarness();
@@ -29,6 +32,65 @@ void main() {
       expect(find.widgetWithText(ElevatedButton, 'STOP ASSISTANCE'),
           findsOneWidget);
       expect(find.text('Listening for voice commands'), findsOneWidget);
+    });
+
+    testWidgets('saved locale keeps English UI and localizes voice commands',
+        (WidgetTester tester) async {
+      for (final language in [
+        (
+          code: 'te',
+          status: 'ASSISTANT STATUS',
+          command: 'సహాయం ప్రారంభించండి',
+          running: 'Assistant Running',
+          question: 'నా ముందు ఏముంది',
+          object: 'వ్యక్తి',
+          tag: 'te-IN',
+        ),
+        (
+          code: 'hi',
+          status: 'ASSISTANT STATUS',
+          command: 'सहायता शुरू करें',
+          running: 'Assistant Running',
+          question: 'मेरे सामने क्या है',
+          object: 'व्यक्ति',
+          tag: 'hi-IN',
+        ),
+      ]) {
+        SharedPreferences.setMockInitialValues({
+          'selected_language': language.code,
+        });
+        final harness = _HomeScreenHarness()..voice.initializeResult = true;
+        await tester.pumpWidget(harness.build());
+        await tester.pumpAndSettle();
+
+        expect(find.text(language.status), findsOneWidget);
+        expect(find.text('START ASSISTANCE'), findsOneWidget);
+        expect(find.text('STOP ASSISTANCE'), findsOneWidget);
+        expect(find.text('ಸಹಾಯಕుడి స్థితి'), findsNothing);
+        expect(harness.voice.requestedLanguageTag, language.tag);
+        expect(harness.speech.startedLanguageTags, [language.tag]);
+        expect(
+          harness.voice.spoken.first,
+          contains(language.code == 'te' ? 'సిద్ధంగా' : 'तैयार'),
+        );
+
+        await harness.speech.emit(language.command);
+        await tester.pumpAndSettle();
+        expect(find.text(language.running), findsOneWidget);
+
+        await harness.camera.emitFrame();
+        await tester.pumpAndSettle();
+        expect(
+          harness.voice.spoken.last,
+          contains(language.code == 'te' ? 'ఆగండి' : 'रुकें'),
+        );
+        await harness.speech.emit(language.question);
+        await tester.pumpAndSettle();
+        expect(harness.voice.spoken.last, contains(language.object));
+
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pumpAndSettle();
+      }
     });
 
     testWidgets('START button changes status to Assistant Running',
@@ -251,7 +313,7 @@ void main() {
       await tester.pump();
 
       expect(harness.voice.spoken.last,
-          contains('Warning. Stop. Obstacle ahead.'));
+          contains('Stop. person is very close ahead.'));
     });
 
     testWidgets('read sign captures once and speaks confident OCR text',
@@ -267,7 +329,8 @@ void main() {
 
       expect(harness.camera.snapshotCount, 1);
       expect(harness.backend.signReadCount, 1);
-      expect(harness.voice.spoken.last, 'The sign says: EXIT 24 HOURS.');
+      expect(harness.voice.spoken.last, 'EXIT 24 HOURS');
+      expect(harness.voice.spoken, contains('The sign says.'));
       expect(harness.speech.ttsStates.last, isFalse);
     });
 
@@ -403,7 +466,8 @@ void main() {
       await harness.camera.emitFrame();
       await tester.pump();
 
-      expect(harness.voice.spoken.last, contains('Warning. Stop.'));
+      expect(harness.voice.spoken.last,
+          contains('Stop. person is very close ahead.'));
     });
 
     testWidgets('caution alert uses the distinct medium haptic',
@@ -479,7 +543,8 @@ void main() {
       await tester.pump();
 
       expect(harness.hapticLevels, [false, true]);
-      expect(harness.voice.spoken.last, contains('Warning. Stop.'));
+      expect(harness.voice.spoken.last,
+          contains('Stop. person is very close ahead.'));
     });
 
     testWidgets('backend HIGH STOP result requests native HIGH waveform',
@@ -528,7 +593,8 @@ void main() {
 
       expect(hapticPriorities, ['high']);
       expect(find.byKey(const ValueKey('haptic-diagnostic')), findsNothing);
-      expect(voice.spoken.last, contains('Warning. Stop.'));
+      expect(voice.spoken.last,
+          contains('Stop. person is very close ahead.'));
     });
 
     testWidgets('backend MEDIUM CAUTION result requests native MEDIUM waveform',
@@ -634,7 +700,7 @@ void main() {
       await tester.pump();
 
       final speech = harness.voice.spoken.last;
-      expect(speech, contains('high-risk scene'));
+      expect(speech, contains('Nearby scene with high reported risk'));
       expect(speech.indexOf('person'), lessThan(speech.indexOf('bicycle')));
       expect(speech, isNot(contains('chair')));
       expect(speech, contains('depth is relative, not distance in meters'));
@@ -839,9 +905,22 @@ class _FakeCameraService extends CameraService {
 
 class _FakeVoiceService extends VoiceService {
   final List<String> spoken = [];
+  bool initializeResult = false;
+  String? requestedLanguageTag;
+  String _activeLanguageTag = 'en-US';
 
   @override
-  Future<bool> initialize() async => false;
+  String get activeLanguageTag => _activeLanguageTag;
+
+  @override
+  Future<bool> initialize() async => initializeResult;
+
+  @override
+  Future<bool> setLanguage(String languageTag) async {
+    requestedLanguageTag = languageTag;
+    _activeLanguageTag = languageTag;
+    return true;
+  }
 
   @override
   Future<bool> speak(String text) async {
@@ -859,16 +938,24 @@ class _FakeVoiceService extends VoiceService {
 class _FakeSpeechRecognitionService extends SpeechRecognitionService {
   VoiceCommandHandler? _handler;
   final List<bool> ttsStates = [];
+  final List<String> startedLanguageTags = [];
 
   @override
-  Future<bool> initialize({ValueChanged<String>? onStatusChanged}) async {
+  Future<bool> initialize({
+    ValueChanged<String>? onStatusChanged,
+    VoiceRecognitionErrorHandler? onError,
+  }) async {
     onStatusChanged?.call('Listening for voice commands');
     return true;
   }
 
   @override
-  Future<bool> startListening(VoiceCommandHandler onResult) async {
+  Future<bool> startListening(
+    VoiceCommandHandler onResult, {
+    String languageTag = 'en-US',
+  }) async {
     _handler = onResult;
+    startedLanguageTags.add(languageTag);
     return true;
   }
 

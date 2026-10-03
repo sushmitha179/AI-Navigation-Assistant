@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:flutter_tts/flutter_tts.dart';
@@ -8,8 +9,16 @@ import '../models/navigation_model.dart';
 /// This service handles text-to-speech to provide audio feedback
 /// for visually impaired users.
 class VoiceService {
+  VoiceService({FlutterTts? textToSpeech, bool? isAndroid})
+      : _textToSpeech = textToSpeech,
+        _isAndroid = isAndroid ?? Platform.isAndroid;
+
+  final FlutterTts? _textToSpeech;
+  final bool _isAndroid;
   FlutterTts? _flutterTts;
   bool _isInitialized = false;
+  bool _isSpeaking = false;
+  Future<void> _speechQueue = Future<void>.value();
   String _activeLanguageTag = 'en-US';
   String? _lastNavigationKey;
   DateTime? _lastNavigationAt;
@@ -19,8 +28,9 @@ class VoiceService {
   ///
   /// Returns true if initialization successful
   Future<bool> initialize() async {
+    if (_isInitialized) return true;
     try {
-      _flutterTts = FlutterTts();
+      _flutterTts = _textToSpeech ?? FlutterTts();
 
       // Set default speech parameters
       await _flutterTts!
@@ -28,10 +38,13 @@ class VoiceService {
       await _flutterTts!.setVolume(1.0);
       await _flutterTts!.setPitch(1.0);
 
-      await _flutterTts!.setLanguage(_activeLanguageTag);
       await _flutterTts!.awaitSpeakCompletion(true);
 
       _isInitialized = true;
+      if (!await setLanguage('en-US')) {
+        _isInitialized = false;
+        return false;
+      }
       return true;
     } catch (e) {
       print('Voice service initialization error: $e');
@@ -43,14 +56,19 @@ class VoiceService {
 
   Future<bool> setLanguage(String languageTag) async {
     final tts = _flutterTts;
-    if (!_isInitialized || tts == null) return false;
+    if (!_isInitialized || tts == null || _isSpeaking) return false;
     try {
-      if (Platform.isAndroid &&
-          await tts.isLanguageInstalled(languageTag) != true) {
+      final installedVoices = await _getInstalledVoices(tts, languageTag);
+      if (installedVoices.isEmpty) {
         await _useEnglishFallback(tts);
         return false;
       }
-      if (await tts.isLanguageAvailable(languageTag) != true) {
+      final voice = installedVoices.first;
+      final voiceResult = await tts.setVoice({
+        'name': voice['name']!,
+        'locale': voice['locale']!,
+      });
+      if (voiceResult != true && voiceResult != 1) {
         await _useEnglishFallback(tts);
         return false;
       }
@@ -68,12 +86,49 @@ class VoiceService {
     }
   }
 
-  Future<void> _useEnglishFallback(FlutterTts tts) async {
+  Future<List<Map<String, String>>> _getInstalledVoices(
+    FlutterTts tts,
+    String languageTag,
+  ) async {
+    if (await tts.isLanguageAvailable(languageTag) != true) return const [];
+    if (_isAndroid && await tts.isLanguageInstalled(languageTag) != true) {
+      return const [];
+    }
+    final voices = await tts.getVoices;
+    if (voices is! List) return const [];
+    final requestedLocale = _normalizeLocale(languageTag);
+    return voices
+        .whereType<Map>()
+        .map((voice) => voice.map(
+              (key, value) => MapEntry(key.toString(), value.toString()),
+            ))
+        .where((voice) =>
+            voice['name'] != null &&
+            voice['locale'] != null &&
+            _normalizeLocale(voice['locale']!) == requestedLocale)
+        .map((voice) => Map<String, String>.from(voice))
+        .toList(growable: false);
+  }
+
+  String _normalizeLocale(String tag) => tag.replaceAll('_', '-').toLowerCase();
+
+  Future<bool> _useEnglishFallback(FlutterTts tts) async {
     try {
-      await tts.setLanguage('en-US');
+      final englishVoices = await _getInstalledVoices(tts, 'en-US');
+      if (englishVoices.isEmpty) return false;
+      final voice = englishVoices.first;
+      final voiceResult = await tts.setVoice({
+        'name': voice['name']!,
+        'locale': voice['locale']!,
+      });
+      if (voiceResult != true && voiceResult != 1) return false;
+      final result = await tts.setLanguage('en-US');
+      if (result != true && result != 1) return false;
       _activeLanguageTag = 'en-US';
+      return true;
     } catch (error) {
       print('English TTS fallback unavailable: $error');
+      return false;
     }
   }
 
@@ -82,18 +137,37 @@ class VoiceService {
   /// [text] - Text to speak
   /// Returns true if speech started successfully
   Future<bool> speak(String text) async {
-    if (!_isInitialized || _flutterTts == null) {
+    final tts = _flutterTts;
+    if (!_isInitialized || tts == null) {
       print('Voice service not initialized');
       return false;
     }
 
-    try {
-      await _flutterTts!.speak(text);
-      return true;
-    } catch (e) {
-      print('Speech error: $e');
+    final completer = Completer<bool>();
+    _speechQueue = _speechQueue.then((_) async {
+      try {
+        _isSpeaking = true;
+        await tts.speak(text);
+        completer.complete(true);
+      } catch (error) {
+        print('Speech error: $error');
+        completer.complete(false);
+      } finally {
+        _isSpeaking = false;
+      }
+    });
+    return completer.future;
+  }
+
+  Future<bool> speakTextInLanguage(String text, String languageTag) async {
+    final originalTag = _activeLanguageTag;
+    if (!await setLanguage(languageTag)) {
+      await setLanguage(originalTag);
       return false;
     }
+    final spoken = await speak(text);
+    final restored = await setLanguage(originalTag);
+    return spoken && restored;
   }
 
   Future<bool> speakNavigation(NavigationModel navigation) async {
