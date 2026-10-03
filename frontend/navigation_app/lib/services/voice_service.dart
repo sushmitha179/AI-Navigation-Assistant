@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter_tts/flutter_tts.dart';
 import '../models/navigation_model.dart';
 
@@ -8,6 +10,7 @@ import '../models/navigation_model.dart';
 class VoiceService {
   FlutterTts? _flutterTts;
   bool _isInitialized = false;
+  String _activeLanguageTag = 'en-US';
   String? _lastNavigationKey;
   DateTime? _lastNavigationAt;
   static const Duration _navigationCooldown = Duration(seconds: 3);
@@ -25,8 +28,7 @@ class VoiceService {
       await _flutterTts!.setVolume(1.0);
       await _flutterTts!.setPitch(1.0);
 
-      // Set language to English
-      await _flutterTts!.setLanguage('en-US');
+      await _flutterTts!.setLanguage(_activeLanguageTag);
       await _flutterTts!.awaitSpeakCompletion(true);
 
       _isInitialized = true;
@@ -34,6 +36,44 @@ class VoiceService {
     } catch (e) {
       print('Voice service initialization error: $e');
       return false;
+    }
+  }
+
+  String get activeLanguageTag => _activeLanguageTag;
+
+  Future<bool> setLanguage(String languageTag) async {
+    final tts = _flutterTts;
+    if (!_isInitialized || tts == null) return false;
+    try {
+      if (Platform.isAndroid &&
+          await tts.isLanguageInstalled(languageTag) != true) {
+        await _useEnglishFallback(tts);
+        return false;
+      }
+      if (await tts.isLanguageAvailable(languageTag) != true) {
+        await _useEnglishFallback(tts);
+        return false;
+      }
+      final result = await tts.setLanguage(languageTag);
+      if (result != true && result != 1) {
+        await _useEnglishFallback(tts);
+        return false;
+      }
+      _activeLanguageTag = languageTag;
+      return true;
+    } catch (error) {
+      print('TTS language unavailable ($languageTag): $error');
+      await _useEnglishFallback(tts);
+      return false;
+    }
+  }
+
+  Future<void> _useEnglishFallback(FlutterTts tts) async {
+    try {
+      await tts.setLanguage('en-US');
+      _activeLanguageTag = 'en-US';
+    } catch (error) {
+      print('English TTS fallback unavailable: $error');
     }
   }
 

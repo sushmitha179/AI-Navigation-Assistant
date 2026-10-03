@@ -17,6 +17,7 @@ from perception_module import PerceptionModule
 
 _pipeline: Optional[PerceptionModule] = None
 _pipeline_lock = threading.Lock()
+_inference_lock = threading.Lock()
 
 
 def _get_pipeline() -> PerceptionModule:
@@ -45,7 +46,10 @@ def analyze_image(image_bytes: bytes, perception: Optional[PerceptionModule] = N
     if image is None:
         raise ValueError("The uploaded file is not a supported image")
 
-    results = (perception or _get_pipeline()).process_frame(image)
+    # PerceptionModule owns mutable MiDaS and classifier state; serialize users
+    # of the shared model instances served by ThreadingHTTPServer.
+    with _inference_lock:
+        results = (perception or _get_pipeline()).process_frame(image)
     detections = []
     for detection in results.get("detections", []):
         detections.append(_json_value({

@@ -1,7 +1,9 @@
-import json
 import threading
+import time
+import json
 import unittest
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
 import cv2
@@ -38,6 +40,36 @@ class TestApiServer(unittest.TestCase):
         self.assertEqual(result["relevant_object"], "person")
         self.assertEqual(result["detections"][0]["collision_risk"], "HIGH")
         self.assertNotIn("depth_value", result["detections"][0])
+
+    def test_shared_perception_inference_is_serialized(self):
+        class ConcurrentPerception:
+            def __init__(self):
+                self.lock = threading.Lock()
+                self.active = 0
+                self.max_active = 0
+
+            def process_frame(self, frame):
+                with self.lock:
+                    self.active += 1
+                    self.max_active = max(self.max_active, self.active)
+                time.sleep(0.02)
+                with self.lock:
+                    self.active -= 1
+                return {"detections": []}
+
+        success, encoded = cv2.imencode(
+            ".jpg", np.zeros((20, 20, 3), dtype=np.uint8)
+        )
+        self.assertTrue(success)
+        perception = ConcurrentPerception()
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            results = list(executor.map(
+                lambda _: analyze_image(encoded.tobytes(), perception), range(8)
+            ))
+
+        self.assertEqual(len(results), 8)
+        self.assertEqual(perception.max_active, 1)
 
     def test_read_sign_endpoint_returns_ocr_text_and_confidence(self):
         success, encoded = cv2.imencode(

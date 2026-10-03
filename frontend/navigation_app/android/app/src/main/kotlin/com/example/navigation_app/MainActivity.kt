@@ -3,13 +3,18 @@ package com.example.navigation_app
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.util.Log
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import androidx.core.app.ActivityCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -29,16 +34,42 @@ class MainActivity : FlutterActivity() {
     private var isTtsSpeaking = false
     private var recognitionActive = false
     private var shouldListen = false
+    private var requestedRecognitionLanguage = "en-US"
     private val mainHandler = Handler(Looper.getMainLooper())
     private var endOfSpeechWatchdog: Runnable? = null
+    private var activeHapticPriority: String? = null
+    private var activeHighHapticUntil = 0L
+    private var hapticGeneration = 0
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
         channel?.setMethodCallHandler { call, result ->
             when (call.method) {
+                "getSelectedLanguage" -> {
+                    val saved = getSharedPreferences("navigation_settings", MODE_PRIVATE)
+                        .getString("assistant_language", null)
+                    result.success(saved)
+                }
+                "setSelectedLanguage" -> {
+                    val code = call.argument<String>("code")
+                    if (code !in setOf("en", "te", "hi")) {
+                        result.success(false)
+                    } else {
+                        getSharedPreferences("navigation_settings", MODE_PRIVATE)
+                            .edit()
+                            .putString("assistant_language", code)
+                            .apply()
+                        result.success(true)
+                    }
+                }
                 "initialize" -> result.success(initializeSpeech())
-                "startListening" -> result.success(startListening())
+                "startListening" -> {
+                    val args = call.arguments as? Map<*, *>
+                    requestedRecognitionLanguage =
+                        args?.get("languageTag") as? String ?: "en-US"
+                    result.success(startListening())
+                }
                 "stopListening" -> {
                     shouldListen = false
                     destroyRecognizer()
@@ -52,6 +83,11 @@ class MainActivity : FlutterActivity() {
                         reportState("speaking")
                     }
                     result.success(true)
+                }
+                "triggerHaptic" -> result.success(triggerHaptic(call.arguments))
+                "stopHaptics" -> {
+                    val force = (call.arguments as? Map<*, *>)?.get("force") == true
+                    result.success(stopHaptics(force))
                 }
                 "requestCameraPermission" -> {
                     requestCameraPermission()
@@ -102,6 +138,14 @@ class MainActivity : FlutterActivity() {
                 if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
                     shouldListen = false
                     reportError("permission_denied", "Microphone permission denied")
+                } else if (requestedRecognitionLanguage != "en-US" &&
+                    (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED ||
+                        error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE)) {
+                    requestedRecognitionLanguage = "en-US"
+                    reportError(
+                        "language_fallback",
+                        "Selected speech-recognition language unavailable; English will be used",
+                    )
                 } else {
                     reportError("$error", recognitionErrorMessage(error))
                 }
@@ -147,7 +191,7 @@ class MainActivity : FlutterActivity() {
         if (speechRecognizer == null) return false
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, requestedRecognitionLanguage)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1000L)
@@ -196,6 +240,94 @@ class MainActivity : FlutterActivity() {
     private fun reportError(code: String, message: String) {
         Log.w(TAG, "Reporting recognition error to Flutter; code=$code message=$message")
         channel?.invokeMethod("onRecognitionError", mapOf("code" to code, "message" to message))
+    }
+
+    private fun deviceVibrator(): Vibrator? {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            getSystemService(VibratorManager::class.java)?.defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            (getSystemService(VIBRATOR_SERVICE) as? Vibrator)
+        }
+    }
+
+    private fun triggerHaptic(arguments: Any?): Boolean {
+        val values = arguments as? Map<*, *> ?: return false
+        val priority = values["priority"] as? String ?: return false
+        val signature = values["signature"] as? String ?: return false
+        if (priority != "high" && priority != "medium") return false
+
+        val vibrator = deviceVibrator()
+        if (vibrator?.hasVibrator() != true) {
+            Log.i(TAG, "Haptic alert ignored: no vibrator available")
+            return false
+        }
+
+        val now = SystemClock.elapsedRealtime()
+        if (priority == "medium" && activeHapticPriority == "high" &&
+            now < activeHighHapticUntil) {
+            Log.d(TAG, "Medium haptic ignored while HIGH pattern is active")
+            return false
+        }
+
+        val timings = if (priority == "high") {
+            longArrayOf(0, 220, 110, 220, 110, 220, 300, 220, 110, 220, 110, 220)
+        } else {
+            longArrayOf(0, 100, 120, 100)
+        }
+        val amplitudes = if (priority == "high") {
+            intArrayOf(0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255)
+        } else {
+            intArrayOf(0, 128, 0, 128)
+        }
+        val duration = timings.sum()
+        val generation = ++hapticGeneration
+        try {
+            vibrator.cancel()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val effect = if (vibrator.hasAmplitudeControl()) {
+                    VibrationEffect.createWaveform(timings, amplitudes, -1)
+                } else {
+                    VibrationEffect.createWaveform(timings, -1)
+                }
+                vibrator.vibrate(effect)
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(timings, -1)
+            }
+            activeHapticPriority = priority
+            activeHighHapticUntil = if (priority == "high") now + duration else 0L
+            Log.d(TAG, "Started $priority haptic alert: $signature")
+            mainHandler.postDelayed({
+                if (hapticGeneration == generation) {
+                    activeHapticPriority = null
+                    activeHighHapticUntil = 0L
+                }
+            }, duration)
+            return true
+        } catch (error: RuntimeException) {
+            activeHapticPriority = null
+            activeHighHapticUntil = 0L
+            Log.w(TAG, "Could not start haptic alert", error)
+            return false
+        }
+    }
+
+    private fun stopHaptics(force: Boolean): Boolean {
+        if (!force && activeHapticPriority == "high" &&
+            SystemClock.elapsedRealtime() < activeHighHapticUntil) {
+            return false
+        }
+        hapticGeneration++
+        activeHapticPriority = null
+        activeHighHapticUntil = 0L
+        return try {
+            deviceVibrator()?.cancel()
+            true
+        } catch (error: RuntimeException) {
+            Log.w(TAG, "Could not stop haptic alert", error)
+            false
+        }
     }
 
     private fun recognitionErrorMessage(error: Int): String {
@@ -247,6 +379,7 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         shouldListen = false
         destroyRecognizer()
+        stopHaptics(force = true)
         super.onDestroy()
     }
 }

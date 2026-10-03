@@ -1,5 +1,7 @@
-import 'package:flutter/material.dart';
+import 'dart:async';
 import 'dart:typed_data';
+
+import 'package:flutter/material.dart';
 import '../models/detection_model.dart';
 import '../services/backend_service.dart';
 import '../services/camera_service.dart';
@@ -15,6 +17,8 @@ class HomeScreen extends StatefulWidget {
     this.cameraService,
     this.voiceService,
     this.speechRecognitionService,
+    this.hapticFeedback,
+    this.enableHapticDiagnostic = const bool.fromEnvironment('HAPTIC_TEST'),
   });
 
   @visibleForTesting
@@ -31,6 +35,12 @@ class HomeScreen extends StatefulWidget {
 
   @visibleForTesting
   final SpeechRecognitionService? speechRecognitionService;
+
+  @visibleForTesting
+  final Future<void> Function(bool highRisk)? hapticFeedback;
+
+  @visibleForTesting
+  final bool enableHapticDiagnostic;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -49,6 +59,8 @@ class _HomeScreenState extends State<HomeScreen> {
   DateTime? _lastNavigationAnnouncementAt;
   DateTime? _lastAnalysisErrorAnnouncementAt;
   DateTime? _latestNavigationAt;
+  DateTime? _lastHapticAt;
+  String? _lastHapticSignature;
   int _assistantGeneration = 0;
 
   // Voice services
@@ -155,6 +167,30 @@ class _HomeScreenState extends State<HomeScreen> {
     await _speakWithPause(
       'Available commands: start assistance, stop assistance, read sign, ask what is in front, left, or right, repeat instruction, and help.',
     );
+  }
+
+  Future<void> _runHapticDiagnostic() async {
+    await _sendHaptic(
+      true,
+      'diagnostic-${DateTime.now().microsecondsSinceEpoch}',
+    );
+  }
+
+  Future<void> _sendHaptic(bool highRisk, String signature) async {
+    try {
+      final testHaptic = widget.hapticFeedback;
+      if (testHaptic != null) {
+        await testHaptic(highRisk);
+      } else {
+        final started = await _speechRecognitionService.triggerRiskHaptic(
+          highRisk: highRisk,
+          signature: signature,
+        );
+        if (!started) debugPrint('[haptics] Device did not start vibration');
+      }
+    } catch (error) {
+      debugPrint('[haptics] Vibration feedback unavailable: $error');
+    }
   }
 
   bool _isSceneQuestion(List<String> words) {
@@ -271,12 +307,16 @@ class _HomeScreenState extends State<HomeScreen> {
   String _describeDetection(DetectionModel detection) {
     final position = detection.horizontalPosition.toUpperCase();
     final area = _cameraArea(position);
-    final risk = detection.collisionRisk.toLowerCase();
-    final proximity = detection.proximityCategory?.toLowerCase();
-    final proximityText = proximity == null || proximity == 'unknown'
-        ? 'depth unavailable'
-        : 'relative proximity $proximity';
-    return '${detection.className} at the $area, $proximityText, $risk reported risk';
+    final risk = detection.collisionRisk.trim().toUpperCase();
+    final riskText = const {'HIGH', 'MEDIUM', 'LOW'}.contains(risk)
+        ? '${risk.toLowerCase()} reported risk'
+        : 'risk unavailable';
+    final proximity = detection.proximityCategory?.trim().toUpperCase();
+    final proximityText =
+        const {'VERY CLOSE', 'CLOSE', 'MEDIUM', 'FAR'}.contains(proximity)
+            ? 'relative proximity ${proximity!.toLowerCase()}'
+            : 'relative depth unavailable';
+    return '${detection.className} at the $area, $riskText, $proximityText';
   }
 
   Future<void> _toggleAssistant() async {
@@ -330,7 +370,18 @@ class _HomeScreenState extends State<HomeScreen> {
                     GestureDetector(
                       behavior: HitTestBehavior.opaque,
                       onTap: () {},
-                      child: _buildControlButtons(),
+                      child: Column(
+                        children: [
+                          _buildControlButtons(),
+                          if (widget.enableHapticDiagnostic)
+                            TextButton.icon(
+                              key: const ValueKey('haptic-diagnostic'),
+                              onPressed: _runHapticDiagnostic,
+                              icon: const Icon(Icons.vibration),
+                              label: const Text('Test vibration'),
+                            ),
+                        ],
+                      ),
                     ),
                     const SizedBox(height: 24),
                     _buildFooter(),
@@ -634,8 +685,17 @@ class _HomeScreenState extends State<HomeScreen> {
         .toList()
       ..sort();
     final signature = '${navigation.action}|${detections.join(';')}';
-    final urgent = navigation.action == 'STOP' ||
-        navigation.action == 'CAUTION / SLOW DOWN';
+    final highRisk = navigation.action == 'STOP' ||
+        navigation.priority.toUpperCase() == 'HIGH' ||
+        navigation.detections.any((detection) =>
+            detection.collisionRisk.toUpperCase() == 'HIGH' ||
+            detection.proximityCategory?.toUpperCase() == 'VERY CLOSE');
+    final mediumRisk = !highRisk &&
+        (navigation.action == 'CAUTION / SLOW DOWN' ||
+            navigation.priority.toUpperCase() == 'MEDIUM' ||
+            navigation.detections.any((detection) =>
+                detection.collisionRisk.toUpperCase() == 'MEDIUM'));
+    final urgent = highRisk || mediumRisk;
     final now = DateTime.now();
     final elapsed = _lastNavigationAnnouncementAt == null
         ? null
@@ -654,7 +714,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ? 'Caution. Slow down.'
         : '${navigation.action[0]}${navigation.action.substring(1).toLowerCase()}.';
     final announcement = urgent
-        ? 'Warning. $actionText ${navigation.reason}. Positioning is camera-relative, not a mapped route.'
+        ? 'Warning. $actionText ${navigation.reason}. ${_describeCurrentScene(navigation)}'
         : navigation.action == 'CONTINUE'
             ? _describeCurrentScene(navigation)
             : 'Camera-based suggestion: $actionText ${navigation.reason}. This is not a mapped route.';
@@ -662,16 +722,84 @@ class _HomeScreenState extends State<HomeScreen> {
     _lastAnnouncedNavigationKey = signature;
     _lastNavigationAnnouncementAt = now;
     _lastInstruction = announcement;
+    if (highRisk) {
+      unawaited(_playRiskHaptic(true, 'high|$signature'));
+    } else if (mediumRisk) {
+      unawaited(_playRiskHaptic(false, 'medium|$signature'));
+    } else if (_lastHapticAt != null) {
+      // Clear obsolete lower-priority feedback, but native code protects an
+      // active HIGH pattern from a non-forced stop request.
+      unawaited(_speechRecognitionService.stopRiskHaptics());
+    }
     await _speakWithPause(announcement);
+  }
+
+  Future<void> _playRiskHaptic(bool highRisk, String signature) async {
+    final now = DateTime.now();
+    if (_lastHapticSignature == signature &&
+        _lastHapticAt != null &&
+        now.difference(_lastHapticAt!) < const Duration(seconds: 4)) {
+      return;
+    }
+    final lastWasHigh = _lastHapticSignature?.startsWith('high|') == true;
+    if (_lastHapticAt != null &&
+        now.difference(_lastHapticAt!) < const Duration(seconds: 3) &&
+        (!highRisk || lastWasHigh)) {
+      return;
+    }
+    _lastHapticAt = now;
+    _lastHapticSignature = signature;
+    await _sendHaptic(highRisk, signature);
   }
 
   String _describeCurrentScene(NavigationModel navigation) {
     if (navigation.detections.isEmpty) {
       return 'No objects were detected in the current camera view. This does not confirm the walking route is clear.';
     }
-    final descriptions =
-        navigation.detections.take(3).map(_describeDetection).join('. ');
-    return 'Camera view: $descriptions. Positions are image-relative.';
+    final detections = [...navigation.detections]..sort((first, second) {
+        final riskDifference =
+            _riskRank(second.collisionRisk) - _riskRank(first.collisionRisk);
+        if (riskDifference != 0) return riskDifference;
+        return _proximityRank(second.proximityCategory) -
+            _proximityRank(first.proximityCategory);
+      });
+    final selected = detections.take(2).toList(growable: false);
+    final descriptions = selected.map(_describeDetection).join('. ');
+    final hasReportedHazard = selected.any((detection) {
+      final risk = detection.collisionRisk.toUpperCase();
+      return risk == 'HIGH' || risk == 'MEDIUM';
+    });
+    return hasReportedHazard
+        ? 'Nearby ${selected.first.collisionRisk.toLowerCase()}-risk scene: $descriptions. Positions are image-relative; depth is relative, not distance in meters.'
+        : 'Detected in the camera view: $descriptions. Positions are image-relative; this does not confirm the route is clear.';
+  }
+
+  int _riskRank(String risk) {
+    switch (risk.toUpperCase()) {
+      case 'HIGH':
+        return 3;
+      case 'MEDIUM':
+        return 2;
+      case 'LOW':
+        return 1;
+      default:
+        return 0;
+    }
+  }
+
+  int _proximityRank(String? proximity) {
+    switch (proximity?.trim().toUpperCase()) {
+      case 'VERY CLOSE':
+        return 4;
+      case 'CLOSE':
+        return 3;
+      case 'MEDIUM':
+        return 2;
+      case 'FAR':
+        return 1;
+      default:
+        return 0;
+    }
   }
 
   Future<void> _stopAssistant() async {
@@ -689,6 +817,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _cameraService.stop(),
       _backendService.disconnect(),
       _voiceService.stop(),
+      _speechRecognitionService.stopRiskHaptics(force: true),
     ]);
     await _speakWithPause('Assistance stopped.');
   }

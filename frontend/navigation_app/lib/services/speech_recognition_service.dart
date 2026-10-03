@@ -14,6 +14,7 @@ class SpeechRecognitionService {
   bool _isTtsSpeaking = false;
   bool _startInProgress = false;
   bool _disposed = false;
+  String _recognitionLanguageTag = 'en-US';
   Timer? _restartTimer;
   VoiceCommandHandler? _onResult;
   ValueChanged<String>? _onStatusChanged;
@@ -71,6 +72,9 @@ class SpeechRecognitionService {
           _isInitialized = false;
           _setStatus(message ?? 'Speech recognition unavailable');
         } else {
+          if (code == 'language_fallback') {
+            _recognitionLanguageTag = 'en-US';
+          }
           _setStatus(
               message ?? 'Listening paused; restarting speech recognition');
           _scheduleRestart();
@@ -118,8 +122,12 @@ class SpeechRecognitionService {
     if (!_disposed) _onStatusChanged?.call(status);
   }
 
-  Future<bool> startListening(VoiceCommandHandler onResult) async {
+  Future<bool> startListening(
+    VoiceCommandHandler onResult, {
+    String languageTag = 'en-US',
+  }) async {
     _onResult = onResult;
+    _recognitionLanguageTag = languageTag;
     _shouldListen = true;
     if (!_isInitialized || _isTtsSpeaking) return false;
     return _startListeningIfNeeded();
@@ -137,8 +145,11 @@ class SpeechRecognitionService {
     _startInProgress = true;
     try {
       debugPrint('[voice] Requesting Android recognition session');
-      _isListening =
-          await _channel.invokeMethod<bool>('startListening') ?? false;
+      _isListening = await _channel.invokeMethod<bool>(
+            'startListening',
+            {'languageTag': _recognitionLanguageTag},
+          ) ??
+          false;
       if (_isListening) _setStatus('Listening for voice commands');
       debugPrint('[voice] Android startListening accepted=$_isListening');
       if (!_isListening && _shouldListen) _scheduleRestart();
@@ -214,6 +225,39 @@ class SpeechRecognitionService {
     }
   }
 
+  Future<bool> triggerRiskHaptic({
+    required bool highRisk,
+    required String signature,
+  }) async {
+    try {
+      return await _channel.invokeMethod<bool>('triggerHaptic', {
+            'priority': highRisk ? 'high' : 'medium',
+            'signature': signature,
+          }) ??
+          false;
+    } on MissingPluginException {
+      return false;
+    } on PlatformException catch (error) {
+      debugPrint('[haptics] Native vibration unavailable: ${error.message}');
+      return false;
+    }
+  }
+
+  Future<bool> stopRiskHaptics({bool force = false}) async {
+    try {
+      return await _channel.invokeMethod<bool>(
+            'stopHaptics',
+            {'force': force},
+          ) ??
+          false;
+    } on MissingPluginException {
+      return false;
+    } on PlatformException catch (error) {
+      debugPrint('[haptics] Could not stop vibration: ${error.message}');
+      return false;
+    }
+  }
+
   bool isReady() => _isInitialized;
 
   bool isListening() => _isListening;
@@ -234,5 +278,6 @@ class SpeechRecognitionService {
     _isInitialized = false;
     _channel.setMethodCallHandler(null);
     _channel.invokeMethod<void>('stopListening');
+    _channel.invokeMethod<void>('stopHaptics', {'force': true});
   }
 }

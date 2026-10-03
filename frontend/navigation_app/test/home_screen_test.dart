@@ -1,7 +1,7 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:navigation_app/models/detection_model.dart';
 import 'package:navigation_app/models/navigation_model.dart';
@@ -11,6 +11,8 @@ import 'package:navigation_app/services/backend_service.dart';
 import 'package:navigation_app/services/camera_service.dart';
 import 'package:navigation_app/services/speech_recognition_service.dart';
 import 'package:navigation_app/services/voice_service.dart';
+
+const _voiceChannel = MethodChannel('voice_recognition');
 
 void main() {
   group('HomeScreen Widget Tests', () {
@@ -373,6 +375,269 @@ void main() {
       await tester.pump();
 
       expect(harness.voice.spoken.length, spokenAfterFirstWarning);
+      expect(harness.hapticLevels, [true]);
+    });
+
+    testWidgets(
+        'diagnostic control triggers the native high waveform without detection',
+        (WidgetTester tester) async {
+      final harness = _HomeScreenHarness();
+      await tester.pumpWidget(harness.build(enableHapticDiagnostic: true));
+      await tester.pump();
+
+      await tester.tap(find.byKey(const ValueKey('haptic-diagnostic')));
+      await tester.pump();
+
+      expect(harness.hapticLevels, [true]);
+      expect(harness.backend.uploadCount, 0);
+    });
+
+    testWidgets('haptic failure does not prevent the spoken STOP warning',
+        (WidgetTester tester) async {
+      final harness = _HomeScreenHarness()
+        ..hapticFeedbackOverride = (_) async => throw StateError('unsupported');
+      await tester.pumpWidget(harness.build());
+      await tester.pump();
+      await harness.speech.emit('start');
+      await tester.pump();
+      await harness.camera.emitFrame();
+      await tester.pump();
+
+      expect(harness.voice.spoken.last, contains('Warning. Stop.'));
+    });
+
+    testWidgets('caution alert uses the distinct medium haptic',
+        (WidgetTester tester) async {
+      final harness = _HomeScreenHarness()
+        ..backend.navigation = const NavigationModel(
+          action: 'CAUTION / SLOW DOWN',
+          reason: 'Obstacle close ahead',
+          priority: 'MEDIUM',
+          relevantObject: 'box',
+          detections: [
+            DetectionModel(
+              className: 'box',
+              confidence: 0.9,
+              collisionRisk: 'MEDIUM',
+              horizontalPosition: 'CENTER',
+              proximityCategory: 'CLOSE',
+            ),
+          ],
+        );
+      await tester.pumpWidget(harness.build());
+      await tester.pump();
+      await harness.speech.emit('start');
+      await tester.pump();
+      await harness.camera.emitFrame();
+      await tester.pump();
+
+      expect(harness.hapticLevels, [false]);
+      expect(harness.voice.spoken.last, contains('Caution'));
+    });
+
+    testWidgets('HIGH alert preempts a recent MEDIUM haptic',
+        (WidgetTester tester) async {
+      final harness = _HomeScreenHarness()
+        ..backend.navigation = const NavigationModel(
+          action: 'CAUTION / SLOW DOWN',
+          reason: 'Obstacle close ahead',
+          priority: 'MEDIUM',
+          relevantObject: 'box',
+          detections: [
+            DetectionModel(
+              className: 'box',
+              confidence: 0.9,
+              collisionRisk: 'MEDIUM',
+              horizontalPosition: 'CENTER',
+              proximityCategory: 'CLOSE',
+            ),
+          ],
+        );
+      await tester.pumpWidget(harness.build());
+      await tester.pump();
+      await harness.speech.emit('start');
+      await tester.pump();
+      await harness.camera.emitFrame();
+      await tester.pump();
+
+      harness.backend.navigation = const NavigationModel(
+        action: 'STOP',
+        reason: 'Person very close ahead',
+        priority: 'HIGH',
+        relevantObject: 'person',
+        detections: [
+          DetectionModel(
+            className: 'person',
+            confidence: 0.99,
+            collisionRisk: 'HIGH',
+            horizontalPosition: 'CENTER',
+            proximityCategory: 'VERY CLOSE',
+          ),
+        ],
+      );
+      await harness.camera.emitFrame();
+      await tester.pump();
+
+      expect(harness.hapticLevels, [false, true]);
+      expect(harness.voice.spoken.last, contains('Warning. Stop.'));
+    });
+
+    testWidgets('backend HIGH STOP result requests native HIGH waveform',
+        (WidgetTester tester) async {
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      final hapticPriorities = <String>[];
+      messenger.setMockMethodCallHandler(_voiceChannel, (call) async {
+        switch (call.method) {
+          case 'initialize':
+          case 'startListening':
+          case 'stopListening':
+          case 'setTtsSpeaking':
+          case 'requestCameraPermission':
+          case 'stopHaptics':
+            return true;
+          case 'triggerHaptic':
+            hapticPriorities.add(
+              (call.arguments as Map)['priority'] as String,
+            );
+            return true;
+          default:
+            return null;
+        }
+      });
+      addTearDown(
+          () => messenger.setMockMethodCallHandler(_voiceChannel, null));
+
+      final backend = _FakeBackendService();
+      final camera = _FakeCameraService();
+      final voice = _FakeVoiceService();
+      await tester.pumpWidget(MaterialApp(
+        home: HomeScreen(
+          skipSpeechPause: true,
+          backendService: backend,
+          cameraService: camera,
+          voiceService: voice,
+          speechRecognitionService: SpeechRecognitionService(),
+        ),
+      ));
+      await tester.pump();
+      await _sendNativeVoiceResult('start assistance');
+      await tester.pump();
+      await camera.emitFrame();
+      await tester.pump();
+
+      expect(hapticPriorities, ['high']);
+      expect(find.byKey(const ValueKey('haptic-diagnostic')), findsNothing);
+      expect(voice.spoken.last, contains('Warning. Stop.'));
+    });
+
+    testWidgets('backend MEDIUM CAUTION result requests native MEDIUM waveform',
+        (WidgetTester tester) async {
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      final hapticPriorities = <String>[];
+      messenger.setMockMethodCallHandler(_voiceChannel, (call) async {
+        switch (call.method) {
+          case 'initialize':
+          case 'startListening':
+          case 'stopListening':
+          case 'setTtsSpeaking':
+          case 'requestCameraPermission':
+          case 'stopHaptics':
+            return true;
+          case 'triggerHaptic':
+            hapticPriorities.add(
+              (call.arguments as Map)['priority'] as String,
+            );
+            return true;
+          default:
+            return null;
+        }
+      });
+      addTearDown(
+          () => messenger.setMockMethodCallHandler(_voiceChannel, null));
+
+      final backend = _FakeBackendService()
+        ..navigation = const NavigationModel(
+          action: 'CAUTION / SLOW DOWN',
+          reason: 'Obstacle close ahead',
+          priority: 'MEDIUM',
+          relevantObject: 'box',
+          detections: [
+            DetectionModel(
+              className: 'box',
+              confidence: 0.9,
+              collisionRisk: 'MEDIUM',
+              horizontalPosition: 'CENTER',
+              proximityCategory: 'CLOSE',
+            ),
+          ],
+        );
+      final camera = _FakeCameraService();
+      final voice = _FakeVoiceService();
+      await tester.pumpWidget(MaterialApp(
+        home: HomeScreen(
+          skipSpeechPause: true,
+          backendService: backend,
+          cameraService: camera,
+          voiceService: voice,
+          speechRecognitionService: SpeechRecognitionService(),
+        ),
+      ));
+      await tester.pump();
+      await _sendNativeVoiceResult('start assistance');
+      await tester.pump();
+      await camera.emitFrame();
+      await tester.pump();
+
+      expect(hapticPriorities, ['medium']);
+      expect(voice.spoken.last, contains('Caution'));
+    });
+
+    testWidgets('scene narration prioritizes high-risk objects',
+        (WidgetTester tester) async {
+      final harness = _HomeScreenHarness()
+        ..backend.navigation = const NavigationModel(
+          action: 'CONTINUE',
+          reason: 'Objects detected',
+          priority: 'LOW',
+          relevantObject: null,
+          detections: [
+            DetectionModel(
+              className: 'chair',
+              confidence: 0.85,
+              collisionRisk: 'LOW',
+              horizontalPosition: 'LEFT',
+              proximityCategory: 'FAR',
+            ),
+            DetectionModel(
+              className: 'person',
+              confidence: 0.96,
+              collisionRisk: 'HIGH',
+              horizontalPosition: 'CENTER',
+              proximityCategory: 'CLOSE',
+            ),
+            DetectionModel(
+              className: 'bicycle',
+              confidence: 0.8,
+              collisionRisk: 'MEDIUM',
+              horizontalPosition: 'RIGHT',
+              proximityCategory: null,
+            ),
+          ],
+        );
+      await tester.pumpWidget(harness.build());
+      await tester.pump();
+      await harness.speech.emit('start');
+      await tester.pump();
+      await harness.camera.emitFrame();
+      await tester.pump();
+
+      final speech = harness.voice.spoken.last;
+      expect(speech, contains('high-risk scene'));
+      expect(speech.indexOf('person'), lessThan(speech.indexOf('bicycle')));
+      expect(speech, isNot(contains('chair')));
+      expect(speech, contains('depth is relative, not distance in meters'));
     });
 
     testWidgets('help command describes supported voice commands',
@@ -446,16 +711,29 @@ class _HomeScreenHarness {
   final camera = _FakeCameraService();
   final voice = _FakeVoiceService();
   final speech = _FakeSpeechRecognitionService();
+  final List<bool> hapticLevels = [];
+  Future<void> Function(bool highRisk)? hapticFeedbackOverride;
 
-  Widget build() => MaterialApp(
+  Widget build({bool enableHapticDiagnostic = false}) => MaterialApp(
         home: HomeScreen(
           skipSpeechPause: true,
           backendService: backend,
           cameraService: camera,
           voiceService: voice,
           speechRecognitionService: speech,
+          enableHapticDiagnostic: enableHapticDiagnostic,
+          hapticFeedback: hapticFeedbackOverride ??
+              (highRisk) async => hapticLevels.add(highRisk),
         ),
       );
+}
+
+Future<void> _sendNativeVoiceResult(String text) async {
+  final data = const StandardMethodCodec().encodeMethodCall(
+    MethodCall('onRecognitionResult', text),
+  );
+  await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+      .handlePlatformMessage(_voiceChannel.name, data, (_) {});
 }
 
 class _FakeBackendService extends BackendService {
@@ -598,6 +876,9 @@ class _FakeSpeechRecognitionService extends SpeechRecognitionService {
   Future<void> setTtsSpeaking(bool speaking) async {
     ttsStates.add(speaking);
   }
+
+  @override
+  Future<bool> stopRiskHaptics({bool force = false}) async => true;
 
   @override
   Future<void> requestCameraPermission() async {}

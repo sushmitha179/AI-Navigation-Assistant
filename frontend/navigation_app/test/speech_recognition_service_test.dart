@@ -10,10 +10,12 @@ void main() {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
   var startCount = 0;
   var initializeResult = true;
+  final hapticCalls = <MethodCall>[];
 
   setUp(() {
     startCount = 0;
     initializeResult = true;
+    hapticCalls.clear();
     messenger.setMockMethodCallHandler(_channel, (call) async {
       switch (call.method) {
         case 'initialize':
@@ -24,6 +26,12 @@ void main() {
         case 'stopListening':
           return true;
         case 'setTtsSpeaking':
+          return true;
+        case 'triggerHaptic':
+          hapticCalls.add(call);
+          return true;
+        case 'stopHaptics':
+          hapticCalls.add(call);
           return true;
         default:
           return null;
@@ -112,6 +120,35 @@ void main() {
 
     expect(service.isReady(), isFalse);
     expect(startCount, 1);
+    service.dispose();
+  });
+
+  test('risk haptics send distinct priorities and allow forced cancellation',
+      () async {
+    final service = SpeechRecognitionService();
+
+    expect(
+      await service.triggerRiskHaptic(
+        highRisk: true,
+        signature: 'person|CENTER|HIGH',
+      ),
+      isTrue,
+    );
+    expect(
+      await service.triggerRiskHaptic(
+        highRisk: false,
+        signature: 'box|CENTER|MEDIUM',
+      ),
+      isTrue,
+    );
+    expect(await service.stopRiskHaptics(force: true), isTrue);
+
+    expect(hapticCalls[0].method, 'triggerHaptic');
+    expect((hapticCalls[0].arguments as Map)['priority'], 'high');
+    expect(hapticCalls[1].method, 'triggerHaptic');
+    expect((hapticCalls[1].arguments as Map)['priority'], 'medium');
+    expect(hapticCalls[2].method, 'stopHaptics');
+    expect((hapticCalls[2].arguments as Map)['force'], isTrue);
     service.dispose();
   });
 }

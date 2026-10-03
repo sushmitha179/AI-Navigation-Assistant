@@ -3,7 +3,6 @@ import cv2
 import numpy as np
 import threading
 from typing import Optional, Tuple
-from queue import Queue
 
 
 class MiDaSDepthEstimator:
@@ -19,7 +18,7 @@ class MiDaSDepthEstimator:
         """
         print("Loading MiDaS...")
         self.model_type = model_type
-        self.skip_frames = skip_frames
+        self.skip_frames = max(1, skip_frames)
         
         # Load MiDaS model
         self.midas = torch.hub.load("intel-isl/MiDaS", model_type)
@@ -32,6 +31,7 @@ class MiDaSDepthEstimator:
         # Depth map storage
         self.depth_map = None
         self.depth_map_lock = threading.Lock()
+        self.depth_map_frame_count: Optional[int] = None
         
         # Frame processing
         self.frame_count = 0
@@ -49,25 +49,29 @@ class MiDaSDepthEstimator:
         Returns:
             Depth map as numpy array, or None if not ready
         """
-        self.frame_count += 1
-        
-        # Skip frames to reduce CPU load
-        if self.frame_count % self.skip_frames != 0:
-            return self._get_latest_depth()
-        
-        # If already processing, skip this frame
-        if self.processing:
-            return self._get_latest_depth()
-        
-        # Process depth in background thread
-        self.processing = True
-        thread = threading.Thread(target=self._process_depth, args=(frame.copy(),))
-        thread.daemon = True
-        thread.start()
-        
-        return self._get_latest_depth()
+        with self.depth_map_lock:
+            self.frame_count += 1
+            frame_count = self.frame_count
+            should_start = (
+                frame_count % self.skip_frames == 0 and not self.processing
+            )
+            if should_start:
+                self.processing = True
+
+        if should_start:
+            thread = threading.Thread(
+                target=self._process_depth,
+                args=(frame.copy(), frame_count),
+            )
+            thread.daemon = True
+            thread.start()
+
+        return self._get_latest_depth(
+            max_age_frames=self.skip_frames,
+            current_frame=frame_count,
+        )
     
-    def _process_depth(self, frame: np.ndarray):
+    def _process_depth(self, frame: np.ndarray, frame_count: int):
         """Process depth estimation in background thread."""
         try:
             # Convert BGR to RGB
@@ -93,6 +97,7 @@ class MiDaSDepthEstimator:
             
             with self.depth_map_lock:
                 self.depth_map = depth_map
+                self.depth_map_frame_count = frame_count
                 
         except Exception as e:
             print(f"Depth estimation error: {e}")
@@ -100,10 +105,21 @@ class MiDaSDepthEstimator:
             with self.depth_map_lock:
                 self.processing = False
     
-    def _get_latest_depth(self) -> Optional[np.ndarray]:
-        """Get the latest available depth map."""
+    def _get_latest_depth(
+        self,
+        max_age_frames: Optional[int] = None,
+        current_frame: Optional[int] = None,
+    ) -> Optional[np.ndarray]:
+        """Get a recent depth map, or None when its source frame is too old."""
         with self.depth_map_lock:
-            return self.depth_map.copy() if self.depth_map is not None else None
+            if self.depth_map is None:
+                return None
+            if max_age_frames is not None:
+                frame = self.frame_count if current_frame is None else current_frame
+                source_frame = self.depth_map_frame_count
+                if source_frame is None or frame - source_frame > max_age_frames:
+                    return None
+            return self.depth_map.copy()
     
     def get_depth_at_bbox(self, bbox: Tuple[int, int, int, int]) -> Optional[float]:
         """
@@ -115,7 +131,7 @@ class MiDaSDepthEstimator:
         Returns:
             Median depth value in the region, or None if depth map unavailable
         """
-        depth_map = self._get_latest_depth()
+        depth_map = self._get_latest_depth(max_age_frames=self.skip_frames)
         if depth_map is None:
             return None
         
