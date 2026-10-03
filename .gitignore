@@ -1,0 +1,25 @@
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+.env
+.env.*
+!.env.example
+.pytest_cache/
+
+# Flutter / Dart
+frontend/navigation_app/.dart_tool/
+frontend/navigation_app/build/
+frontend/navigation_app/.flutter-plugins
+frontend/navigation_app/.flutter-plugins-dependencies
+
+# IDE and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
